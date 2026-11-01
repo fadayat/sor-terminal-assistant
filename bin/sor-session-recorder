@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+
+import errno
+import fcntl
+import os
+from pathlib import Path
+import pty
+import select
+import signal
+import sys
+import termios
+import tty
+
+
+def runtime_directory() -> Path:
+    configured = os.environ.get("XDG_RUNTIME_DIR")
+    if configured:
+        return Path(configured)
+    return Path("/tmp") / f"sor-runtime-{os.getuid()}"
+
+
+def copy_window_size(master_fd: int, child_pid: int) -> None:
+    try:
+        window_size = fcntl.ioctl(sys.stdin.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, window_size)
+        os.kill(child_pid, signal.SIGWINCH)
+    except OSError:
+        pass
+
+
+def main() -> int:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("sor-session-recorder yalnız interaktiv terminalda işləyir.", file=sys.stderr)
+        return 2
+
+    session_directory = runtime_directory() / "sor-sessions"
+    session_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    session_directory.chmod(0o700)
+    log_path = session_directory / f"terminal-{os.getpid()}.log"
+    log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+    child_pid, master_fd = pty.fork()
+    if child_pid == 0:
+        environment = os.environ.copy()
+        environment["SOR_SESSION_RECORDING"] = "1"
+        environment["SOR_SESSION_LOG"] = str(log_path)
+        shell = environment.get("SHELL", "/bin/bash")
+        os.execve(shell, [shell, "-i"], environment)
+
+    old_terminal_settings = termios.tcgetattr(sys.stdin.fileno())
+    child_status = 1
+
+    def resize(_signal_number=None, _frame=None) -> None:
+        copy_window_size(master_fd, child_pid)
+
+    signal.signal(signal.SIGWINCH, resize)
+    resize()
+
+    try:
+        tty.setraw(sys.stdin.fileno())
+        while True:
+            readable, _, _ = select.select([sys.stdin.fileno(), master_fd], [], [])
+
+            if sys.stdin.fileno() in readable:
+                user_input = os.read(sys.stdin.fileno(), 65536)
+                if not user_input:
+                    break
+                os.write(master_fd, user_input)
+
+            if master_fd in readable:
+                try:
+                    terminal_output = os.read(master_fd, 65536)
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        break
+                    raise
+                if not terminal_output:
+                    break
+                os.write(sys.stdout.fileno(), terminal_output)
+                os.write(log_fd, terminal_output)
+    finally:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_terminal_settings)
+        os.close(log_fd)
+        os.close(master_fd)
+        _, child_status = os.waitpid(child_pid, 0)
+        try:
+            log_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    return os.waitstatus_to_exitcode(child_status)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
