@@ -28,6 +28,22 @@ def copy_window_size(master_fd: int, child_pid: int) -> None:
         pass
 
 
+def create_private_file(path: Path) -> int:
+    return os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+
+
+def remove_session_files(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def main() -> int:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("sor-session-recorder yalnız interaktiv terminalda işləyir.", file=sys.stderr)
@@ -36,57 +52,85 @@ def main() -> int:
     session_directory = runtime_directory() / "sor-sessions"
     session_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     session_directory.chmod(0o700)
-    log_path = session_directory / f"terminal-{os.getpid()}.log"
-    log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    session_id = f"terminal-{os.getpid()}"
+    log_path = session_directory / f"{session_id}.log"
+    events_path = session_directory / f"{session_id}.events.jsonl"
+    start_path = session_directory / f"{session_id}.start"
+    pause_path = session_directory / f"{session_id}.paused"
+    session_paths = [log_path, events_path, start_path, pause_path]
+    log_fd: int | None = None
+    temporary_fds: list[int] = []
+    try:
+        log_fd = create_private_file(log_path)
+        events_fd = create_private_file(events_path)
+        temporary_fds.append(events_fd)
+        start_fd = create_private_file(start_path)
+        temporary_fds.append(start_fd)
+    except BaseException:
+        if log_fd is not None:
+            os.close(log_fd)
+        for descriptor in temporary_fds:
+            os.close(descriptor)
+        remove_session_files(session_paths)
+        raise
+    else:
+        for descriptor in temporary_fds:
+            os.close(descriptor)
 
-    child_pid, master_fd = pty.fork()
-    if child_pid == 0:
-        environment = os.environ.copy()
-        environment["SOR_SESSION_RECORDING"] = "1"
-        environment["SOR_SESSION_LOG"] = str(log_path)
-        shell = environment.get("SHELL", "/bin/bash")
-        os.execve(shell, [shell, "-i"], environment)
-
-    old_terminal_settings = termios.tcgetattr(sys.stdin.fileno())
-    child_status = 1
-
-    def resize(_signal_number=None, _frame=None) -> None:
-        copy_window_size(master_fd, child_pid)
-
-    signal.signal(signal.SIGWINCH, resize)
-    resize()
+    assert log_fd is not None
 
     try:
-        tty.setraw(sys.stdin.fileno())
-        while True:
-            readable, _, _ = select.select([sys.stdin.fileno(), master_fd], [], [])
+        child_pid, master_fd = pty.fork()
+        if child_pid == 0:
+            environment = os.environ.copy()
+            environment["SOR_SESSION_RECORDING"] = "1"
+            environment["SOR_SESSION_LOG"] = str(log_path)
+            environment["SOR_SESSION_EVENTS"] = str(events_path)
+            environment["SOR_SESSION_START_FILE"] = str(start_path)
+            environment["SOR_SESSION_PAUSE_FILE"] = str(pause_path)
+            environment["SOR_SESSION_EVENT_HELPER"] = str(Path(__file__).resolve().with_name("sor-session-event"))
+            shell = environment.get("SHELL", "/bin/bash")
+            os.execve(shell, [shell, "-i"], environment)
 
-            if sys.stdin.fileno() in readable:
-                user_input = os.read(sys.stdin.fileno(), 65536)
-                if not user_input:
-                    break
-                os.write(master_fd, user_input)
+        old_terminal_settings = termios.tcgetattr(sys.stdin.fileno())
+        child_status = 1
 
-            if master_fd in readable:
-                try:
-                    terminal_output = os.read(master_fd, 65536)
-                except OSError as error:
-                    if error.errno == errno.EIO:
-                        break
-                    raise
-                if not terminal_output:
-                    break
-                os.write(sys.stdout.fileno(), terminal_output)
-                os.write(log_fd, terminal_output)
-    finally:
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_terminal_settings)
-        os.close(log_fd)
-        os.close(master_fd)
-        _, child_status = os.waitpid(child_pid, 0)
+        def resize(_signal_number=None, _frame=None) -> None:
+            copy_window_size(master_fd, child_pid)
+
+        signal.signal(signal.SIGWINCH, resize)
+        resize()
+
         try:
-            log_path.unlink()
-        except FileNotFoundError:
-            pass
+            tty.setraw(sys.stdin.fileno())
+            while True:
+                readable, _, _ = select.select([sys.stdin.fileno(), master_fd], [], [])
+
+                if sys.stdin.fileno() in readable:
+                    user_input = os.read(sys.stdin.fileno(), 65536)
+                    if not user_input:
+                        break
+                    os.write(master_fd, user_input)
+
+                if master_fd in readable:
+                    try:
+                        terminal_output = os.read(master_fd, 65536)
+                    except OSError as error:
+                        if error.errno == errno.EIO:
+                            break
+                        raise
+                    if not terminal_output:
+                        break
+                    os.write(sys.stdout.fileno(), terminal_output)
+                    if not pause_path.exists():
+                        os.write(log_fd, terminal_output)
+        finally:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_terminal_settings)
+            os.close(log_fd)
+            os.close(master_fd)
+            _, child_status = os.waitpid(child_pid, 0)
+    finally:
+        remove_session_files(session_paths)
 
     return os.waitstatus_to_exitcode(child_status)
 

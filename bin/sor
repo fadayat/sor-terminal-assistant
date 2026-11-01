@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import argparse
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -11,17 +13,51 @@ import sys
 from websockets.sync.client import unix_connect
 
 
-CODEX_HOME = Path("/home/fadayat/.codex-account-2")
-CODEX_BIN = Path("/home/fadayat/.local/bin/codex")
-SOCKET_PATH = CODEX_HOME / "app-server-control" / "app-server-control.sock"
-MODEL = "gpt-6-luna"
-EFFORT = "low"
-WORK_DIR = "/tmp"
+@dataclass(frozen=True)
+class ProviderConfig:
+    name: str
+    home: Path
+    executable: Path
+    model: str
+    default_effort: str
+    work_dir: str = "/tmp"
+
+    @property
+    def socket_path(self) -> Path:
+        return self.home / "app-server-control" / "app-server-control.sock"
+
+
+PROVIDER = ProviderConfig(
+    name="Codex 2",
+    home=Path("/home/fadayat/.codex-account-2"),
+    executable=Path("/home/fadayat/.local/bin/codex"),
+    model="gpt-6-luna",
+    default_effort="low",
+)
+CODEX_HOME = PROVIDER.home
+CODEX_BIN = PROVIDER.executable
+SOCKET_PATH = PROVIDER.socket_path
+MODEL = PROVIDER.model
+EFFORT = PROVIDER.default_effort
+WORK_DIR = PROVIDER.work_dir
 SESSION_CONTEXT_CHARS = 60_000
 SESSION_CONTEXT_BYTES = 256_000
+SESSION_EVENTS_BYTES = 1_000_000
+VERSION = "0.2.0"
 
 OSC_ESCAPE = re.compile(r"\x1B\](?:[^\x07\x1B]|\x1B(?!\\))*(?:\x07|\x1B\\)")
 ANSI_ESCAPE = re.compile(r"\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])")
+BEARER_SECRET = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
+ENV_SECRET = re.compile(
+    r"(?i)(\b(?:[A-Z_][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Z0-9_]*|TOKEN|KEY|SECRET|PASSWORD)\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s;&|]+)"
+)
+GITHUB_SECRET = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b")
+OPENAI_SECRET = re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")
+PRIVATE_KEY_BLOCK = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+REDACTED = "[REDACTED]"
 
 DEVELOPER_INSTRUCTIONS = (
     "Qısa və birbaşa terminal köməkçisi kimi cavab ver. "
@@ -58,22 +94,105 @@ def clean_terminal_text(raw_text: str) -> str:
     return "".join(cleaned)
 
 
-def terminal_session_context() -> str:
+def redact_secrets(text: str) -> str:
+    text = PRIVATE_KEY_BLOCK.sub(REDACTED, text)
+    text = BEARER_SECRET.sub(rf"\1{REDACTED}", text)
+    text = ENV_SECRET.sub(rf"\1{REDACTED}", text)
+    text = GITHUB_SECRET.sub(REDACTED, text)
+    return OPENAI_SECRET.sub(REDACTED, text)
+
+
+def validated_session_file(configured: str | None) -> Path | None:
+    if not configured:
+        return None
+    try:
+        allowed_directory = session_directory().resolve(strict=True)
+        path = Path(configured).resolve(strict=True)
+        if not path.is_relative_to(allowed_directory):
+            return None
+        file_status = path.stat()
+        if not stat.S_ISREG(file_status.st_mode) or file_status.st_uid != os.getuid():
+            return None
+        return path
+    except (FileNotFoundError, OSError, RuntimeError):
+        return None
+
+
+def session_files() -> tuple[Path | None, Path | None]:
+    log_path = validated_session_file(os.environ.get("SOR_SESSION_LOG"))
+    events_path = validated_session_file(os.environ.get("SOR_SESSION_EVENTS"))
+    return log_path, events_path
+
+
+def read_command_events(events_path: Path | None) -> list[dict]:
+    if events_path is None:
+        return []
+    try:
+        records = []
+        with events_path.open("rb") as events_file:
+            file_size = events_path.stat().st_size
+            if file_size > SESSION_EVENTS_BYTES:
+                events_file.seek(file_size - SESSION_EVENTS_BYTES)
+            payload = events_file.read(SESSION_EVENTS_BYTES)
+        lines = payload.decode("utf-8", errors="replace").splitlines()
+        if file_size > SESSION_EVENTS_BYTES and lines:
+            lines = lines[1:]
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if valid_command_record(record):
+                records.append(record)
+        return records
+    except (OSError, UnicodeError):
+        return []
+
+
+def valid_command_record(record: object) -> bool:
+    if not isinstance(record, dict) or record.get("type") != "command":
+        return False
+    if not isinstance(record.get("command"), str):
+        return False
+    if not isinstance(record.get("exit_code"), int):
+        return False
+    if not isinstance(record.get("cwd"), str):
+        return False
+    if not isinstance(record.get("finished_at"), (int, float)):
+        return False
+    for key in ("started_at", "duration_ms"):
+        if record.get(key) is not None and not isinstance(record.get(key), (int, float)):
+            return False
+    return True
+
+
+def paused_flag(log_path: Path | None) -> Path | None:
+    return log_path.with_suffix(".paused") if log_path else None
+
+
+def is_session_paused(log_path: Path | None) -> bool:
+    flag = paused_flag(log_path)
+    if flag is None:
+        return False
+    try:
+        flag.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def terminal_session_context(last: int = 3) -> str:
     configured_path = os.environ.get("SOR_SESSION_LOG")
-    if not configured_path:
+    log_path = validated_session_file(configured_path)
+    events_path = validated_session_file(os.environ.get("SOR_SESSION_EVENTS"))
+    if log_path is None or is_session_paused(log_path):
         return ""
 
     try:
-        allowed_directory = session_directory().resolve(strict=True)
-        log_path = Path(configured_path).resolve(strict=True)
-        if not log_path.is_relative_to(allowed_directory):
-            return ""
-        file_status = log_path.stat()
-        if not stat.S_ISREG(file_status.st_mode) or file_status.st_uid != os.getuid():
-            return ""
-
         with log_path.open("rb") as log_file:
-            file_size = file_status.st_size
+            file_size = log_path.stat().st_size
             if file_size > SESSION_CONTEXT_BYTES:
                 log_file.seek(file_size - SESSION_CONTEXT_BYTES)
             raw_context = log_file.read(SESSION_CONTEXT_BYTES)
@@ -85,11 +204,23 @@ def terminal_session_context() -> str:
         context = "[Sessiyanın əvvəlki hissəsi ölçü limitinə görə kəsilib.]\n" + context[
             -SESSION_CONTEXT_CHARS:
         ]
+    context = redact_secrets(context)
+    events = read_command_events(events_path)[-last:]
+    if events:
+        formatted_events = []
+        for event in events:
+            command = redact_secrets(event["command"])
+            formatted_events.append(
+                f"Komanda: {command}\nÇıxış kodu: {event['exit_code']}\n"
+                f"Qovluq: {event['cwd']}\nMüddət: {event.get('duration_ms')} ms"
+            )
+        event_text = "\n\n".join(formatted_events)
+        context = f"Son komandalar:\n{event_text}\n\nTerminal çıxışı:\n{context}"
     return context
 
 
-def build_user_input(question: str) -> str:
-    context = terminal_session_context()
+def build_user_input(question: str, *, include_context: bool = True, last: int = 3) -> str:
+    context = terminal_session_context(last=last) if include_context else ""
     if not context:
         return question
 
@@ -105,11 +236,23 @@ def build_user_input(question: str) -> str:
     )
 
 
+def mode_instruction(mode: str) -> str:
+    return {
+        "fix": "Səbəbi qısa izah et və düzəldilmiş əmri ayrıca göstər. Əmri heç vaxt icra etmə.",
+        "cmd": "Yalnız işlədiləcək shell əmrini qaytar, əlavə izah yazma. Əmri heç vaxt icra etmə.",
+        "deep": "Məsələni diqqətlə və dərin təhlil et; əsaslandırmanı və alternativləri qısa strukturla.",
+    }.get(mode, "")
+
+
+def reasoning_effort(mode: str) -> str:
+    return "high" if mode == "deep" else PROVIDER.default_effort
+
+
 def start_daemon() -> None:
     environment = os.environ.copy()
     environment["CODEX_HOME"] = str(CODEX_HOME)
     result = subprocess.run(
-        [str(CODEX_BIN), "app-server", "daemon", "start"],
+        [str(PROVIDER.executable), "app-server", "daemon", "start"],
         env=environment,
         capture_output=True,
         text=True,
@@ -124,7 +267,7 @@ def start_daemon() -> None:
 def connect():
     try:
         return unix_connect(
-            str(SOCKET_PATH),
+            str(PROVIDER.socket_path),
             uri="ws://localhost/",
             open_timeout=5,
             close_timeout=1,
@@ -134,7 +277,7 @@ def connect():
         start_daemon()
         try:
             return unix_connect(
-                str(SOCKET_PATH),
+                str(PROVIDER.socket_path),
                 uri="ws://localhost/",
                 open_timeout=5,
                 close_timeout=1,
@@ -168,8 +311,12 @@ def response_error(message: dict, request_id: int) -> str | None:
     return str(error)
 
 
-def ask(question: str) -> None:
-    user_input = build_user_input(question)
+def ask(question: str, *, mode: str = "ask", last: int = 3, include_context: bool = True) -> None:
+    user_input = build_user_input(question, include_context=include_context, last=last)
+    effort = reasoning_effort(mode)
+    instruction = mode_instruction(mode)
+    if instruction:
+        user_input = f"{instruction}\n\n{user_input}"
     with connect() as connection:
         send(
             connection,
@@ -180,7 +327,7 @@ def ask(question: str) -> None:
                     "clientInfo": {
                         "name": "sor_terminal",
                         "title": "Sor Terminal Assistant",
-                        "version": "1.0.0",
+                        "version": VERSION,
                     }
                 },
             },
@@ -201,8 +348,8 @@ def ask(question: str) -> None:
                 "method": "thread/start",
                 "id": 1,
                 "params": {
-                    "model": MODEL,
-                    "cwd": WORK_DIR,
+                    "model": PROVIDER.model,
+                    "cwd": PROVIDER.work_dir,
                     "approvalPolicy": "never",
                     "sandbox": "read-only",
                     "ephemeral": True,
@@ -229,9 +376,9 @@ def ask(question: str) -> None:
                 "params": {
                     "threadId": thread_id,
                     "input": [{"type": "text", "text": user_input}],
-                    "model": MODEL,
-                    "effort": EFFORT,
-                    "cwd": WORK_DIR,
+                    "model": PROVIDER.model,
+                    "effort": effort,
+                    "cwd": PROVIDER.work_dir,
                     "approvalPolicy": "never",
                     "sandboxPolicy": {"type": "readOnly"},
                 },
@@ -303,26 +450,127 @@ def get_question(arguments: list[str]) -> str:
     return input("Sual: ").strip()
 
 
+def parse_cli(arguments: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="sor",
+        description="Cari terminal sessiyasından kontekst götürərək Codex-ə sual ver.",
+    )
+    parser.add_argument("--no-context", action="store_true", help="terminal kontekstini göndərmə")
+    parser.add_argument("--last", type=int, default=3, metavar="N", help="son N komanda qeydini əlavə et")
+    parser.add_argument("--status", action="store_true", help="cari konfiqurasiya və sessiyanı göstər")
+    parser.add_argument("target", nargs="?", help="sual, rejim və ya sessiya əmri")
+    parser.add_argument("question", nargs="*", help="sualın davamı")
+    args = parser.parse_args(arguments)
+    if args.last < 1:
+        parser.error("--last ən azı 1 olmalıdır")
+    if args.status and (args.target or args.question):
+        parser.error("--status əlavə arqument qəbul etmir")
+    if args.target in {"pause", "resume", "clear"} and args.question:
+        parser.error(f"{args.target} əlavə arqument qəbul etmir")
+    return args
+
+
+def last_command_question(last: int = 3) -> str:
+    _log_path, events_path = session_files()
+    events = read_command_events(events_path)
+    if not events:
+        return ""
+    event = events[-1]
+    return (
+        "Son terminal komandamın nəticəsini izah et. Xüsusilə çıxış kodu sıfır deyilsə, "
+        "ehtimal olunan səbəbi və təhlükəsiz növbəti addımı yaz.\n\n"
+        f"Son komanda: {redact_secrets(event['command'])}\n"
+        f"Çıxış kodu: {event['exit_code']}\nQovluq: {event['cwd']}"
+    )
+
+
+def _open_owned_regular_for_truncate(path: Path) -> int:
+    flags = os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    opened = os.fstat(descriptor)
+    if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid():
+        os.close(descriptor)
+        raise SorError("Sessiya faylının təhlükəsizliyi təsdiqlənmədi.")
+    os.ftruncate(descriptor, 0)
+    return descriptor
+
+
+def manage_session(action: str) -> int:
+    log_path, events_path = session_files()
+    if log_path is None:
+        print("Cari terminal sessiyası tapılmadı.", file=sys.stderr)
+        return 2
+    flag = paused_flag(log_path)
+    assert flag is not None
+
+    if action == "pause":
+        try:
+            descriptor = os.open(
+                flag,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except FileExistsError:
+            if not is_session_paused(log_path):
+                raise SorError("Pause faylı təhlükəsiz deyil.")
+        else:
+            os.close(descriptor)
+        print("Terminal konteksti dayandırıldı.")
+    elif action == "resume":
+        if flag.exists() or flag.is_symlink():
+            try:
+                descriptor = os.open(flag, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            except OSError as error:
+                raise SorError("Pause faylı təhlükəsiz deyil.") from error
+            opened = os.fstat(descriptor)
+            os.close(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid():
+                raise SorError("Pause faylı təhlükəsiz deyil.")
+            flag.unlink()
+        print("Terminal konteksti bərpa edildi.")
+    elif action == "clear":
+        paths = [log_path]
+        if events_path is not None and events_path != log_path:
+            paths.append(events_path)
+        for path in paths:
+            descriptor = _open_owned_regular_for_truncate(path)
+            os.close(descriptor)
+        print("Terminal sessiyasının konteksti təmizləndi.")
+    return 0
+
+
 def main() -> int:
-    if sys.argv[1:] and sys.argv[1] in {"-h", "--help"}:
-        print("İstifadə: sor <sual>")
-        print("Nümunə:  sor Linux-da disk yerini necə yoxlayım?")
-        return 0
-
-    if sys.argv[1:] and sys.argv[1] == "--status":
-        context_status = "aktiv" if terminal_session_context() else "aktiv deyil"
-        print(f"Hesab: Codex 2 ({CODEX_HOME})")
-        print(f"Model: {MODEL} {EFFORT}")
+    args = parse_cli(sys.argv[1:])
+    if args.status:
+        log_path, events_path = session_files()
+        paused = is_session_paused(log_path)
+        event_count = len(read_command_events(events_path))
+        context_status = "dayandırılıb" if paused else ("aktiv" if log_path else "aktiv deyil")
+        print(f"Hesab: {PROVIDER.name} ({PROVIDER.home})")
+        print(f"Model: {PROVIDER.model} {PROVIDER.default_effort}")
         print(f"Cari terminal konteksti: {context_status}")
+        print(f"Strukturlaşdırılmış komanda qeydləri: {event_count}")
         return 0
+    if args.target in {"pause", "resume", "clear"}:
+        try:
+            return manage_session(args.target)
+        except (OSError, SorError) as error:
+            print(f"Sor sessiya əmri alınmadı: {error}", file=sys.stderr)
+            return 1
 
-    question = get_question(sys.argv[1:])
+    mode = args.target if args.target in {"fix", "cmd", "deep"} else "ask"
+    question_parts = args.question if mode != "ask" else ([args.target] if args.target else []) + args.question
+    question = ""
+    if not question_parts and not args.no_context and sys.stdin.isatty():
+        question = last_command_question(args.last)
+    if not question:
+        question = get_question(question_parts)
     if not question:
         print("Sual boş ola bilməz.", file=sys.stderr)
         return 2
 
     try:
-        ask(question)
+        ask(question, mode=mode, last=args.last, include_context=not args.no_context)
     except KeyboardInterrupt:
         print("\nSorğu dayandırıldı.", file=sys.stderr)
         return 130

@@ -6,18 +6,49 @@
 sor "Bu xətanın səbəbi nədir?"
 ```
 
-`sor --status` terminal kontekstinin aktiv olub-olmadığını göstərir.
+Sual yazılmadan `sor` çağırıldıqda son tamamlanan komandanı izah edir. Əsas
+rejimlər:
+
+```bash
+sor                 # son komandanı izah et
+sor fix              # problemi izah et və düzəldilmiş əmri təklif et
+sor cmd "portu göstər" # yalnız shell əmri qaytar
+sor deep "bu xəta niyə baş verir?" # Luna high ilə daha dərin təhlil
+sor --last 5 "nə baş verdi?"
+sor --no-context "tar nə edir?"
+```
+
+Təklif olunan əmrlər avtomatik icra edilmir.
+
+Sessiya idarəsi:
+
+```bash
+sor --status
+sor pause
+sor resume
+sor clear
+```
 
 ## İş prinsipi
 
 - İkinci Codex hesabının lokal `app-server` daemon-una qoşulur.
 - `gpt-6-luna` modelini `low` reasoning səviyyəsində işlədir.
+- `deep` rejimi eyni modeli `high` reasoning səviyyəsində işlədir.
 - Hər sual üçün müvəqqəti, yalnız oxuma icazəli sessiya başladır.
-- Hər VTE Bash sessiyasını ayrıca faylda saxlayır. Qovluq `$XDG_RUNTIME_DIR/sor-sessions` altında, bu dəyişən yoxdursa cari istifadəçi üçün `/tmp` altında yaradılır.
+- Hər VTE Bash sessiyasını ayrıca faylda saxlayır və komandaları exit code,
+  qovluq və müddətlə birlikdə strukturlaşdırılmış formada qeyd edir. Qovluq
+  `$XDG_RUNTIME_DIR/sor-sessions` altında, bu dəyişən yoxdursa cari istifadəçi
+  üçün `/tmp` altında yaradılır.
 - Sessiya qovluğu `0700`, log faylları `0600` icazəsi ilə yaradılır. Terminal bağlananda onun log faylı silinir.
-- Modelə sessiyanın təmizlənmiş son 60 000 simvolunadək hissəsi göndərilir. Buraya komandalar və nəticələr daxildir.
+- Modelə sessiyanın təmizlənmiş son 60 000 simvolunadək hissəsi göndərilir.
+- Bearer tokenləri, həssas environment dəyişənləri, tanınan GitHub/OpenAI
+  tokenləri və private key blokları modelə göndərilməzdən əvvəl `[REDACTED]`
+  ilə əvəz olunur. Xam lokal log dəyişdirilmir.
 
-Recorder terminal girişini və çıxışını yazır. VTE Bash başlanğıc hook-u bunu avtomatik başladır. Digər terminal və shell-lərdə `sor-session-recorder` əmrini birbaşa işlətmək olar.
+Recorder terminalın PTY çıxışını yazır; interaktiv shell-in ekranda göstərdiyi
+komandalar da buna daxildir. VTE Bash başlanğıc hook-u recorder-i avtomatik
+başladır. Bəzi `HISTCONTROL` qaydaları və prompt göstərilmədən shell-dən çıxış
+son komandanın strukturlaşdırılmış qeydinin yaranmasına mane ola bilər.
 
 ## Tələblər
 
@@ -32,6 +63,7 @@ Recorder terminal girişini və çıxışını yazır. VTE Bash başlanğıc hoo
 mkdir -p "$HOME/.local/bin" "$HOME/.bashrc.d"
 install -m 0755 bin/sor "$HOME/.local/bin/sor"
 install -m 0755 bin/sor-session-recorder "$HOME/.local/bin/sor-session-recorder"
+install -m 0755 bin/sor-session-event "$HOME/.local/bin/sor-session-event"
 install -m 0644 bash/sor-session.bash "$HOME/.bashrc.d/sor-session.bash"
 ```
 
@@ -46,4 +78,7 @@ sor "Salam, necəsən?"
 
 - `bin/sor` — lokal app-server socket-i ilə Codex-ə sual göndərir.
 - `bin/sor-session-recorder` — PTY vasitəsilə bir terminal sessiyasını qeyd edir.
+- `bin/sor-session-event` — tamamlanan Bash komandalarının metadatasını yazır.
 - `bash/sor-session.bash` — interaktiv VTE Bash sessiyalarında recorder-i başladır.
+
+Gələcək provayder və versiya planı [ROADMAP.md](ROADMAP.md) faylındadır.
