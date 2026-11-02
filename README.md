@@ -23,6 +23,17 @@ sor cmd "show the largest files in this directory"
 
 Suggested commands are printed as text. Sor does not execute them.
 
+## Real terminal example
+
+This output was captured from the current Sor implementation:
+
+```console
+❯ htor
+bash: htor: command not found
+❯ sor "Answer in English only: What happened, and what should I do next?"
+`htor` failed because the command isn’t installed or available on your PATH. Check the intended command’s spelling, or install it if you meant to use it.
+```
+
 > **Early-stage software:** Sor is under active development. Today, automatic session capture is for interactive Bash sessions in VTE-based terminals on Linux. Context matching and secret redaction are best-effort; see [Privacy and session capture](#privacy-and-session-capture).
 
 ## Why Sor
