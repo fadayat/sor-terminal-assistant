@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 
 from websockets.sync.client import unix_connect
 
@@ -40,13 +41,16 @@ SOCKET_PATH = PROVIDER.socket_path
 MODEL = PROVIDER.model
 EFFORT = PROVIDER.default_effort
 WORK_DIR = PROVIDER.work_dir
-SESSION_CONTEXT_CHARS = 60_000
-SESSION_CONTEXT_BYTES = 256_000
+DEFAULT_CONTEXT_CHARS = 10_000
+DEFAULT_CONTEXT_BYTES = 64_000
+DEEP_CONTEXT_CHARS = 60_000
+DEEP_CONTEXT_BYTES = 256_000
 SESSION_EVENTS_BYTES = 1_000_000
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 OSC_ESCAPE = re.compile(r"\x1B\](?:[^\x07\x1B]|\x1B(?!\\))*(?:\x07|\x1B\\)")
 ANSI_ESCAPE = re.compile(r"\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])")
+SPINNER_TEXT = re.compile(r"(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*Cavab hazırlanır\.\.\.)+")
 BEARER_SECRET = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
 ENV_SECRET = re.compile(
     r"(?i)(\b(?:[A-Z_][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Z0-9_]*|TOKEN|KEY|SECRET|PASSWORD)\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s;&|]+)"
@@ -72,6 +76,37 @@ class SorError(Exception):
     pass
 
 
+class Spinner:
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self) -> None:
+        self.enabled = sys.stderr.isatty()
+        self.stopped = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        print(f"\r\033[2K{self.frames[0]} Cavab hazırlanır...", end="", file=sys.stderr, flush=True)
+        self.thread = threading.Thread(target=self._animate, daemon=True)
+        self.thread.start()
+
+    def _animate(self) -> None:
+        frame_index = 1
+        while not self.stopped.wait(0.1):
+            frame = self.frames[frame_index % len(self.frames)]
+            print(f"\r\033[2K{frame} Cavab hazırlanır...", end="", file=sys.stderr, flush=True)
+            frame_index += 1
+
+    def stop(self) -> None:
+        if not self.enabled or self.stopped.is_set():
+            return
+        self.stopped.set()
+        if self.thread is not None:
+            self.thread.join(timeout=0.3)
+        print("\r\033[2K", end="", file=sys.stderr, flush=True)
+
+
 def session_directory() -> Path:
     configured = os.environ.get("XDG_RUNTIME_DIR")
     if configured:
@@ -91,7 +126,7 @@ def clean_terminal_text(raw_text: str) -> str:
             continue
         elif character in {"\n", "\t"} or character.isprintable():
             cleaned.append(character)
-    return "".join(cleaned)
+    return SPINNER_TEXT.sub("", "".join(cleaned))
 
 
 def redact_secrets(text: str) -> str:
@@ -183,7 +218,12 @@ def is_session_paused(log_path: Path | None) -> bool:
         return True
 
 
-def terminal_session_context(last: int = 3) -> str:
+def terminal_session_context(
+    last: int = 3,
+    *,
+    max_chars: int = DEFAULT_CONTEXT_CHARS,
+    max_bytes: int = DEFAULT_CONTEXT_BYTES,
+) -> str:
     configured_path = os.environ.get("SOR_SESSION_LOG")
     log_path = validated_session_file(configured_path)
     events_path = validated_session_file(os.environ.get("SOR_SESSION_EVENTS"))
@@ -193,16 +233,16 @@ def terminal_session_context(last: int = 3) -> str:
     try:
         with log_path.open("rb") as log_file:
             file_size = log_path.stat().st_size
-            if file_size > SESSION_CONTEXT_BYTES:
-                log_file.seek(file_size - SESSION_CONTEXT_BYTES)
-            raw_context = log_file.read(SESSION_CONTEXT_BYTES)
+            if file_size > max_bytes:
+                log_file.seek(file_size - max_bytes)
+            raw_context = log_file.read(max_bytes)
     except (FileNotFoundError, OSError):
         return ""
 
     context = clean_terminal_text(raw_context.decode("utf-8", errors="replace")).strip()
-    if len(context) > SESSION_CONTEXT_CHARS:
+    if len(context) > max_chars:
         context = "[Sessiyanın əvvəlki hissəsi ölçü limitinə görə kəsilib.]\n" + context[
-            -SESSION_CONTEXT_CHARS:
+            -max_chars:
         ]
     context = redact_secrets(context)
     events = read_command_events(events_path)[-last:]
@@ -219,8 +259,25 @@ def terminal_session_context(last: int = 3) -> str:
     return context
 
 
-def build_user_input(question: str, *, include_context: bool = True, last: int = 3) -> str:
-    context = terminal_session_context(last=last) if include_context else ""
+def context_limits(mode: str) -> tuple[int, int]:
+    if mode == "deep":
+        return DEEP_CONTEXT_CHARS, DEEP_CONTEXT_BYTES
+    return DEFAULT_CONTEXT_CHARS, DEFAULT_CONTEXT_BYTES
+
+
+def build_user_input(
+    question: str,
+    *,
+    mode: str = "ask",
+    include_context: bool = True,
+    last: int = 3,
+) -> str:
+    max_chars, max_bytes = context_limits(mode)
+    context = (
+        terminal_session_context(last=last, max_chars=max_chars, max_bytes=max_bytes)
+        if include_context
+        else ""
+    )
     if not context:
         return question
 
@@ -312,7 +369,12 @@ def response_error(message: dict, request_id: int) -> str | None:
 
 
 def ask(question: str, *, mode: str = "ask", last: int = 3, include_context: bool = True) -> None:
-    user_input = build_user_input(question, include_context=include_context, last=last)
+    user_input = build_user_input(
+        question,
+        mode=mode,
+        include_context=include_context,
+        last=last,
+    )
     effort = reasoning_effort(mode)
     instruction = mode_instruction(mode)
     if instruction:
@@ -388,51 +450,58 @@ def ask(question: str, *, mode: str = "ask", last: int = 3, include_context: boo
         phases: dict[str, str | None] = {}
         final_answer = ""
         streamed_answer = False
+        spinner = Spinner()
+        spinner.start()
 
-        while True:
-            message = receive(connection)
-            error = response_error(message, 2)
-            if error:
-                raise SorError(error)
+        try:
+            while True:
+                message = receive(connection)
+                error = response_error(message, 2)
+                if error:
+                    raise SorError(error)
 
-            method = message.get("method")
-            params = message.get("params", {})
+                method = message.get("method")
+                params = message.get("params", {})
 
-            if method == "item/started":
-                item = params.get("item", {})
-                if item.get("type") == "agentMessage":
-                    phases[item.get("id", "")] = item.get("phase")
+                if method == "item/started":
+                    item = params.get("item", {})
+                    if item.get("type") == "agentMessage":
+                        phases[item.get("id", "")] = item.get("phase")
 
-            elif method == "item/agentMessage/delta":
-                item_id = params.get("itemId", "")
-                if phases.get(item_id) == "final_answer":
-                    print(params.get("delta", ""), end="", flush=True)
-                    streamed_answer = True
+                elif method == "item/agentMessage/delta":
+                    item_id = params.get("itemId", "")
+                    if phases.get(item_id) == "final_answer":
+                        spinner.stop()
+                        print(params.get("delta", ""), end="", flush=True)
+                        streamed_answer = True
 
-            elif method == "item/completed":
-                item = params.get("item", {})
-                if (
-                    item.get("type") == "agentMessage"
-                    and item.get("phase") == "final_answer"
-                ):
-                    final_answer = item.get("text", "")
+                elif method == "item/completed":
+                    item = params.get("item", {})
+                    if (
+                        item.get("type") == "agentMessage"
+                        and item.get("phase") == "final_answer"
+                    ):
+                        final_answer = item.get("text", "")
 
-            elif method == "error":
-                error_data = params.get("error", {})
-                raise SorError(str(error_data.get("message") or error_data))
+                elif method == "error":
+                    error_data = params.get("error", {})
+                    raise SorError(str(error_data.get("message") or error_data))
 
-            elif method == "turn/completed":
-                turn = params.get("turn", {})
-                if turn.get("status") != "completed":
-                    error_data = turn.get("error") or {}
-                    raise SorError(str(error_data.get("message") or "Sorğu tamamlanmadı."))
-                if streamed_answer:
-                    print()
-                elif final_answer:
-                    print(final_answer)
-                else:
-                    raise SorError("Codex boş cavab qaytardı.")
-                return
+                elif method == "turn/completed":
+                    spinner.stop()
+                    turn = params.get("turn", {})
+                    if turn.get("status") != "completed":
+                        error_data = turn.get("error") or {}
+                        raise SorError(str(error_data.get("message") or "Sorğu tamamlanmadı."))
+                    if streamed_answer:
+                        print()
+                    elif final_answer:
+                        print(final_answer)
+                    else:
+                        raise SorError("Codex boş cavab qaytardı.")
+                    return
+        finally:
+            spinner.stop()
 
 
 def get_question(arguments: list[str]) -> str:

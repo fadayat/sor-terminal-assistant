@@ -34,13 +34,15 @@ sor clear
 - İkinci Codex hesabının lokal `app-server` daemon-una qoşulur.
 - `gpt-6-luna` modelini `low` reasoning səviyyəsində işlədir.
 - `deep` rejimi eyni modeli `high` reasoning səviyyəsində işlədir.
+- Modelin ilk mətni gələnədək terminalda fəaliyyət göstəricisi göstərir.
 - Hər sual üçün müvəqqəti, yalnız oxuma icazəli sessiya başladır.
 - Hər VTE Bash sessiyasını ayrıca faylda saxlayır və komandaları exit code,
   qovluq və müddətlə birlikdə strukturlaşdırılmış formada qeyd edir. Qovluq
   `$XDG_RUNTIME_DIR/sor-sessions` altında, bu dəyişən yoxdursa cari istifadəçi
   üçün `/tmp` altında yaradılır.
 - Sessiya qovluğu `0700`, log faylları `0600` icazəsi ilə yaradılır. Terminal bağlananda onun log faylı silinir.
-- Modelə sessiyanın təmizlənmiş son 60 000 simvolunadək hissəsi göndərilir.
+- Adi sorğularda sessiyanın təmizlənmiş son 10 000 simvolunadək hissəsi
+  göndərilir. `deep` rejimində limit 60 000 simvoldur.
 - Bearer tokenləri, həssas environment dəyişənləri, tanınan GitHub/OpenAI
   tokenləri və private key blokları modelə göndərilməzdən əvvəl `[REDACTED]`
   ilə əvəz olunur. Xam lokal log dəyişdirilmir.
