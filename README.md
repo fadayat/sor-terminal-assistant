@@ -14,6 +14,7 @@ sor                 # son komandanı izah et
 sor fix              # problemi izah et və düzəldilmiş əmri təklif et
 sor cmd "portu göstər" # yalnız shell əmri qaytar
 sor deep "bu xəta niyə baş verir?" # Luna high ilə daha dərin təhlil
+sor full "əvvəlki terminal çıxışını təhlil et" # xam son 60 000 simvol
 sor --last 5 "nə baş verdi?"
 sor --no-context "tar nə edir?"
 ```
@@ -41,8 +42,16 @@ sor clear
   `$XDG_RUNTIME_DIR/sor-sessions` altında, bu dəyişən yoxdursa cari istifadəçi
   üçün `/tmp` altında yaradılır.
 - Sessiya qovluğu `0700`, log faylları `0600` icazəsi ilə yaradılır. Terminal bağlananda onun log faylı silinir.
-- Adi və `deep` sorğularında sessiyanın təmizlənmiş son 60 000 simvolunadək
-  hissəsi göndərilir. `deep` əlavə olaraq `high` reasoning istifadə edir.
+- Adi sorğularda son komandaların çıxışı və suala uyğun əvvəlki çıxışlar lokal
+  seçilərək maksimum 30 000 simvol göndərilir. Axtarış son 2 MB sessiya logunda
+  aparılır və əlavə model sorğusu yaratmır.
+- Background job bildirişləri kimi komanda bloklarından kənarda qalan məlumatlar
+  üçün büdcənin son 3 000 simvolu xam terminal quyruğuna ayrılır.
+- `deep` və `full` rejimlərində strukturlaşdırılmış komanda məlumatları ilə
+  birlikdə xam son 60 000 simvol göndərilir. `deep` əlavə olaraq `high`
+  reasoning istifadə edir.
+- Marker olmayan köhnə terminal sessiyalarında avtomatik olaraq 60 000
+  simvolluq xam kontekst fallback-i işləyir.
 - Bearer tokenləri, həssas environment dəyişənləri, tanınan GitHub/OpenAI
   tokenləri və private key blokları modelə göndərilməzdən əvvəl `[REDACTED]`
   ilə əvəz olunur. Xam lokal log dəyişdirilmir.
@@ -51,6 +60,9 @@ Recorder terminalın PTY çıxışını yazır; interaktiv shell-in ekranda gös
 komandalar da buna daxildir. VTE Bash başlanğıc hook-u recorder-i avtomatik
 başladır. Bəzi `HISTCONTROL` qaydaları və prompt göstərilmədən shell-dən çıxış
 son komandanın strukturlaşdırılmış qeydinin yaranmasına mane ola bilər.
+Komanda və çıxış əlaqələndirilməsi terminaldakı görünməz markerlərə əsaslanır;
+uyğunsuz marker və ya natamam blok aşkarlananda tam xam kontekst fallback-i
+istifadə olunur.
 
 ## Tələblər
 

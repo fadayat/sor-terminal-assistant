@@ -35,6 +35,9 @@ terminal sessiyası
 
 ## v0.3 — sessiya və gündəlik istifadə
 
+- Komanda çıxışlarının ayrıca bloklar kimi tutulması və sualla uyğun blokların
+  lokal seçilməsi.
+- `full` rejimi ilə xam 60 000 simvolluq kontekstə məcburi keçid.
 - Hər terminal üçün davam edən söhbət və `reset`.
 - Təklif olunan əmri Bash sətrinə yerləşdirmək; avtomatik icra etməmək.
 - Qısa yol, rəngli çıxış və daha aydın xəta mesajları.

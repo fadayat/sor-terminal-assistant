@@ -6,10 +6,17 @@ from pathlib import Path
 import stat
 import sys
 import time
+import uuid
 
 
 class SessionEventError(Exception):
     pass
+
+
+def valid_command_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and value.isascii() and all(
+        character.isalnum() or character in "._:-" for character in value
+    )
 
 
 def validated_session_file(variable: str) -> Path:
@@ -59,36 +66,64 @@ def is_paused() -> bool:
     return True
 
 
-def begin_command() -> None:
-    if is_paused():
-        clear_start_file()
-        return
+def clear_start_file() -> str:
     path = validated_session_file("SOR_SESSION_START_FILE")
-    descriptor = os.open(path, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
-        os.write(descriptor, f"{time.time():.9f}\n".encode("ascii"))
+        value = os.read(descriptor, 4096).decode("ascii", errors="ignore").strip()
     finally:
         os.close(descriptor)
-
-
-def clear_start_file() -> None:
-    path = validated_session_file("SOR_SESSION_START_FILE")
     descriptor = os.open(path, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
     os.close(descriptor)
+    try:
+        state = json.loads(value)
+        command_id = state.get("command_id", "")
+        if valid_command_id(command_id):
+            return command_id
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return ""
 
 
-def finish_command(exit_code: int, cwd: str, command: str) -> None:
+def begin_command() -> str:
     if is_paused():
         clear_start_file()
-        return
+        return ""
+    path = validated_session_file("SOR_SESSION_START_FILE")
+    command_id = uuid.uuid4().hex
+    payload = json.dumps({"command_id": command_id, "started_at": time.time()}, separators=(",", ":"))
+    descriptor = os.open(path, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.write(descriptor, payload.encode("ascii"))
+    finally:
+        os.close(descriptor)
+    return command_id
+
+
+def finish_command(exit_code: int, cwd: str, command: str) -> str:
+    if is_paused():
+        clear_start_file()
+        return ""
     events_path = validated_session_file("SOR_SESSION_EVENTS")
     start_path = validated_session_file("SOR_SESSION_START_FILE")
     try:
-        started_at = float(start_path.read_text(encoding="ascii").strip())
+        state_value = start_path.read_text(encoding="ascii").strip()
     except (OSError, ValueError):
         clear_start_file()
-        return
-    clear_start_file()
+        return ""
+    command_id = clear_start_file()
+    try:
+        state = json.loads(state_value)
+        started_at = float(state["started_at"])
+        command_id = state["command_id"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        try:
+            started_at = float(state_value)
+        except ValueError:
+            return ""
+        command_id = uuid.uuid4().hex
+    if not valid_command_id(command_id):
+        return ""
     finished_at = time.time()
     duration_ms = max(0, round((finished_at - started_at) * 1000))
     record = {
@@ -99,6 +134,7 @@ def finish_command(exit_code: int, cwd: str, command: str) -> None:
         "started_at": started_at,
         "finished_at": finished_at,
         "duration_ms": duration_ms,
+        "command_id": command_id,
     }
     payload = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     descriptor = os.open(events_path, os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
@@ -108,20 +144,30 @@ def finish_command(exit_code: int, cwd: str, command: str) -> None:
             remaining = remaining[os.write(descriptor, remaining) :]
     finally:
         os.close(descriptor)
+    return command_id
 
 
 def main(argv: list[str]) -> int:
     try:
         if len(argv) == 1 and argv[0] == "start":
-            begin_command()
+            command_id = begin_command()
+            if command_id:
+                print(command_id)
             return 0
         if len(argv) == 3 and argv[0] == "finish":
             exit_code = int(argv[1])
             if not 0 <= exit_code <= 255:
                 raise SessionEventError("invalid command status")
-            finish_command(exit_code, argv[2], sys.stdin.read())
+            command_id = finish_command(exit_code, argv[2], sys.stdin.read())
+            if command_id:
+                print(command_id)
             return 0
-        print("İstifadə: sor-session-event start | finish EXIT_CODE CWD", file=sys.stderr)
+        if len(argv) == 1 and argv[0] == "cancel":
+            command_id = clear_start_file()
+            if command_id:
+                print(command_id)
+            return 0
+        print("İstifadə: sor-session-event start | finish EXIT_CODE CWD | cancel", file=sys.stderr)
         return 2
     except (OSError, ValueError, SessionEventError) as error:
         print(f"sor-session-event: {error}", file=sys.stderr)

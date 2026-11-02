@@ -41,16 +41,28 @@ SOCKET_PATH = PROVIDER.socket_path
 MODEL = PROVIDER.model
 EFFORT = PROVIDER.default_effort
 WORK_DIR = PROVIDER.work_dir
-DEFAULT_CONTEXT_CHARS = 60_000
-DEFAULT_CONTEXT_BYTES = 256_000
+SMART_CONTEXT_CHARS = 30_000
+SMART_CONTEXT_BYTES = 2_000_000
+UNSTRUCTURED_TAIL_CHARS = 3_000
+RECENT_BLOCK_CHARS = 10_000
+RELEVANT_BLOCK_CHARS = 6_000
 DEEP_CONTEXT_CHARS = 60_000
 DEEP_CONTEXT_BYTES = 256_000
 SESSION_EVENTS_BYTES = 1_000_000
-VERSION = "0.2.2"
+VERSION = "0.3.0"
 
 OSC_ESCAPE = re.compile(r"\x1B\](?:[^\x07\x1B]|\x1B(?!\\))*(?:\x07|\x1B\\)")
 ANSI_ESCAPE = re.compile(r"\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])")
 SPINNER_TEXT = re.compile(r"(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*Cavab hazırlanır\.\.\.)+")
+BLOCK_MARKER = re.compile(r"\x1b\]777;sor-(start|end)=([A-Za-z0-9._:-]+)\x07")
+VALID_COMMAND_ID = re.compile(r"^[A-Za-z0-9._:-]+$")
+QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "bu", "da", "də", "et", "for", "ilə", "is", "it",
+    "ki", "nə", "necə", "of", "olan", "the", "to", "və", "ya",
+}
+ERROR_QUERY_TERMS = {
+    "error", "failed", "failure", "fix", "problem", "səhv", "xəta", "işləmədi",
+}
 BEARER_SECRET = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
 ENV_SECRET = re.compile(
     r"(?i)(\b(?:[A-Z_][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Z0-9_]*|TOKEN|KEY|SECRET|PASSWORD)\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s;&|]+)"
@@ -218,11 +230,160 @@ def is_session_paused(log_path: Path | None) -> bool:
         return True
 
 
+def parse_output_blocks(raw_text: str) -> dict[str, str]:
+    """Extract completed PTY output regions, ignoring malformed marker sequences."""
+    blocks: dict[str, str] = {}
+    active: dict[str, int] = {}
+    for marker in BLOCK_MARKER.finditer(raw_text):
+        kind, command_id = marker.groups()
+        if kind == "start":
+            active[command_id] = marker.end()
+        elif command_id in active:
+            blocks[command_id] = raw_text[active.pop(command_id):marker.start()]
+    return blocks
+
+
+def unstructured_output(raw_text: str) -> str:
+    """Return PTY text outside completed/in-progress command marker regions."""
+    pieces: list[str] = []
+    active: set[str] = set()
+    cursor = 0
+    for marker in BLOCK_MARKER.finditer(raw_text):
+        if not active:
+            pieces.append(raw_text[cursor:marker.start()])
+        kind, command_id = marker.groups()
+        if kind == "start":
+            active.add(command_id)
+        else:
+            active.discard(command_id)
+        cursor = marker.end()
+    if not active:
+        pieces.append(raw_text[cursor:])
+    return "".join(pieces)
+
+
+def lexical_terms(text: str) -> set[str]:
+    return {
+        term
+        for value in re.findall(r"[\w./:-]{2,}", text, flags=re.UNICODE)
+        if (term := value.casefold()) not in QUERY_STOPWORDS
+    }
+
+
+def relevance_score(question_terms: set[str], record: dict) -> int:
+    if not question_terms:
+        return 0
+    command_terms = lexical_terms(record.get("command", ""))
+    cwd_terms = lexical_terms(record.get("cwd", ""))
+    output_terms = lexical_terms(record.get("output", ""))
+    score = len(question_terms & command_terms) * 20
+    score += len(question_terms & cwd_terms) * 8
+    score += len(question_terms & output_terms) * 4
+    if question_terms & ERROR_QUERY_TERMS and record.get("exit_code") != 0:
+        score += 12
+    return score
+
+
+def trim_output(output: str, budget: int) -> str:
+    if budget <= 0:
+        return ""
+    if len(output) <= budget:
+        return output
+    if budget < 100:
+        return output[-budget:]
+    head_budget = max(32, budget // 4)
+    return output[:head_budget] + "\n[…çıxışın ortası ixtisar edildi…]\n" + output[-(budget-head_budget-40):]
+
+
+def format_command_block(record: dict, output_budget: int) -> str:
+    command = trim_output(redact_secrets(record["command"]), 2_000)
+    cwd = trim_output(redact_secrets(record["cwd"]), 1_000)
+    header = (
+        f"Komanda: {command}\n"
+        f"Çıxış kodu: {record['exit_code']} | Qovluq: {cwd} | "
+        f"Müddət: {record.get('duration_ms')} ms\nÇıxış:\n"
+    )
+    if output_budget <= len(header):
+        return header[:output_budget]
+    output = redact_secrets(clean_terminal_text(record.get("output", "")).strip())
+    return header + trim_output(output, output_budget - len(header))
+
+
+def raw_tail_context(records: list[dict], raw_text: str, last: int) -> str:
+    summaries = []
+    for record in records[-last:]:
+        summaries.append(
+            f"Komanda: {redact_secrets(record['command'])}\n"
+            f"Çıxış kodu: {record['exit_code']} | Qovluq: {redact_secrets(record['cwd'])} | "
+            f"Müddət: {record.get('duration_ms')} ms"
+        )
+    summary = "\n\n".join(summaries)
+    raw_output = redact_secrets(clean_terminal_text(raw_text).strip())
+    separator = "\n\nTerminal çıxışı:\n" if summary and raw_output else ""
+    remaining = max(0, DEEP_CONTEXT_CHARS - len(summary) - len(separator))
+    return summary + separator + raw_output[-remaining:] if remaining else summary[:DEEP_CONTEXT_CHARS]
+
+
+def smart_context(records: list[dict], raw_text: str, question: str, last: int) -> str:
+    output_blocks = parse_output_blocks(raw_text)
+    for record in records:
+        command_id = record.get("command_id")
+        if isinstance(command_id, str) and VALID_COMMAND_ID.fullmatch(command_id):
+            record["output"] = output_blocks.get(command_id, "")
+    identified = [
+        record
+        for record in records
+        if isinstance(record.get("command_id"), str)
+        and VALID_COMMAND_ID.fullmatch(record["command_id"])
+    ]
+    recent_identified = identified[-last:]
+    if any(record["command_id"] not in output_blocks for record in recent_identified):
+        return ""
+
+    available = [record for record in identified if record["command_id"] in output_blocks]
+    if not available:
+        return ""
+
+    recent = available[-last:]
+    recent_ids = {record.get("command_id") for record in recent}
+    older = [record for record in available if record.get("command_id") not in recent_ids]
+    terms = lexical_terms(question)
+    relevant = sorted(
+        older,
+        key=lambda record: (relevance_score(terms, record), record.get("finished_at", 0)),
+        reverse=True,
+    )
+    relevant = [record for record in relevant if relevance_score(terms, record) > 0]
+    recent_ids = {record["command_id"] for record in recent}
+    priority = list(reversed(recent)) + [
+        record for record in relevant if record["command_id"] not in recent_ids
+    ]
+
+    selected: list[tuple[float, str]] = []
+    remaining = SMART_CONTEXT_CHARS - UNSTRUCTURED_TAIL_CHARS
+    for record in priority:
+        if remaining < 100:
+            break
+        per_block = RECENT_BLOCK_CHARS if record["command_id"] in recent_ids else RELEVANT_BLOCK_CHARS
+        block = format_command_block(record, min(remaining, per_block))
+        if block:
+            selected.append((record.get("finished_at", 0), block))
+            remaining -= len(block) + 2
+    selected.sort(key=lambda item: item[0])
+    selected_text = "\n\n".join(block for _finished_at, block in selected)
+    tail_label = "Bloklardan kənar son terminal çıxışı:\n"
+    tail_budget = UNSTRUCTURED_TAIL_CHARS - len(tail_label)
+    tail = redact_secrets(clean_terminal_text(unstructured_output(raw_text)).strip())[-tail_budget:]
+    if tail:
+        return selected_text + "\n\n" + tail_label + tail
+    return selected_text
+
+
 def terminal_session_context(
     last: int = 3,
     *,
-    max_chars: int = DEFAULT_CONTEXT_CHARS,
-    max_bytes: int = DEFAULT_CONTEXT_BYTES,
+    question: str = "",
+    mode: str = "ask",
 ) -> str:
     configured_path = os.environ.get("SOR_SESSION_LOG")
     log_path = validated_session_file(configured_path)
@@ -233,36 +394,24 @@ def terminal_session_context(
     try:
         with log_path.open("rb") as log_file:
             file_size = log_path.stat().st_size
+            max_bytes = DEEP_CONTEXT_BYTES if mode in {"deep", "full"} else SMART_CONTEXT_BYTES
             if file_size > max_bytes:
                 log_file.seek(file_size - max_bytes)
             raw_context = log_file.read(max_bytes)
     except (FileNotFoundError, OSError):
         return ""
 
-    context = clean_terminal_text(raw_context.decode("utf-8", errors="replace")).strip()
-    if len(context) > max_chars:
-        context = "[Sessiyanın əvvəlki hissəsi ölçü limitinə görə kəsilib.]\n" + context[
-            -max_chars:
-        ]
-    context = redact_secrets(context)
-    events = read_command_events(events_path)[-last:]
-    if events:
-        formatted_events = []
-        for event in events:
-            command = redact_secrets(event["command"])
-            formatted_events.append(
-                f"Komanda: {command}\nÇıxış kodu: {event['exit_code']}\n"
-                f"Qovluq: {event['cwd']}\nMüddət: {event.get('duration_ms')} ms"
-            )
-        event_text = "\n\n".join(formatted_events)
-        context = f"Son komandalar:\n{event_text}\n\nTerminal çıxışı:\n{context}"
-    return context
+    raw_text = raw_context.decode("utf-8", errors="replace")
+    events = read_command_events(events_path)
+    if mode == "full" or mode == "deep":
+        return raw_tail_context(events, raw_text, last)
 
+    context = smart_context(events, raw_text, question, last)
+    if context:
+        return context
 
-def context_limits(mode: str) -> tuple[int, int]:
-    if mode == "deep":
-        return DEEP_CONTEXT_CHARS, DEEP_CONTEXT_BYTES
-    return DEFAULT_CONTEXT_CHARS, DEFAULT_CONTEXT_BYTES
+    # Old terminal sessions do not have markers; preserve their full recent context.
+    return raw_tail_context(events, raw_text, last)
 
 
 def build_user_input(
@@ -272,9 +421,8 @@ def build_user_input(
     include_context: bool = True,
     last: int = 3,
 ) -> str:
-    max_chars, max_bytes = context_limits(mode)
     context = (
-        terminal_session_context(last=last, max_chars=max_chars, max_bytes=max_bytes)
+        terminal_session_context(last=last, question=question, mode=mode)
         if include_context
         else ""
     )
@@ -527,7 +675,7 @@ def parse_cli(arguments: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-context", action="store_true", help="terminal kontekstini göndərmə")
     parser.add_argument("--last", type=int, default=3, metavar="N", help="son N komanda qeydini əlavə et")
     parser.add_argument("--status", action="store_true", help="cari konfiqurasiya və sessiyanı göstər")
-    parser.add_argument("target", nargs="?", help="sual, rejim və ya sessiya əmri")
+    parser.add_argument("target", nargs="?", help="sual, rejim (fix/cmd/deep/full) və ya sessiya əmri")
     parser.add_argument("question", nargs="*", help="sualın davamı")
     args = parser.parse_args(arguments)
     if args.last < 1:
@@ -619,6 +767,7 @@ def main() -> int:
         print(f"Model: {PROVIDER.model} {PROVIDER.default_effort}")
         print(f"Cari terminal konteksti: {context_status}")
         print(f"Strukturlaşdırılmış komanda qeydləri: {event_count}")
+        print("Kontekst seçimi: ağıllı (son komandalar + suala uyğun çıxışlar)")
         return 0
     if args.target in {"pause", "resume", "clear"}:
         try:
@@ -627,7 +776,7 @@ def main() -> int:
             print(f"Sor sessiya əmri alınmadı: {error}", file=sys.stderr)
             return 1
 
-    mode = args.target if args.target in {"fix", "cmd", "deep"} else "ask"
+    mode = args.target if args.target in {"fix", "cmd", "deep", "full"} else "ask"
     question_parts = args.question if mode != "ask" else ([args.target] if args.target else []) + args.question
     question = ""
     if not question_parts and not args.no_context and sys.stdin.isatty():
