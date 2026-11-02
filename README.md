@@ -1,77 +1,51 @@
-# Sor Terminal Assistant
+# Sor
 
-`sor` terminalda sual verməyə və Codex-dən cavab almağa imkan verir. Cavab üçün yazılan sualla yanaşı, həmin terminal sessiyasının əvvəlki komandaları və görünən nəticələri də göndərilir.
+**Ask your terminal.** Sor (`sor` means “ask” in Azerbaijani) is a small, context-aware terminal companion. It can use the command and output from your current shell session to help explain errors, suggest a fix, or write a command for you to review.
 
-```bash
-sor "Bu xətanın səbəbi nədir?"
-```
-
-Sual yazılmadan `sor` çağırıldıqda son tamamlanan komandanı izah edir. Əsas
-rejimlər:
+Sor runs as a normal shell command and connects to a locally authenticated Codex app-server. It is designed to stay close to your terminal workflow: ask a question, get a streamed answer, and keep control of what runs.
 
 ```bash
-sor                 # son komandanı izah et
-sor fix              # problemi izah et və düzəldilmiş əmri təklif et
-sor cmd "portu göstər" # yalnız shell əmri qaytar
-sor deep "bu xəta niyə baş verir?" # Luna high ilə daha dərin təhlil
-sor full "əvvəlki terminal çıxışını təhlil et" # xam son 60 000 simvol
-sor --last 5 "nə baş verdi?"
-sor --no-context "tar nə edir?"
+sor "Why did the last command fail?"
+sor fix
+sor cmd "show the largest files in this directory"
 ```
 
-Təklif olunan əmrlər avtomatik icra edilmir.
+Suggested commands are printed as text. Sor does not execute them.
 
-Sessiya idarəsi:
+> **Early-stage software:** Sor is under active development. Today, automatic session capture is for interactive Bash sessions in VTE-based terminals on Linux. Context matching and secret redaction are best-effort; see [Privacy and session capture](#privacy-and-session-capture).
+
+## What it does
+
+- Captures command metadata and terminal output for the current session.
+- Selects recent commands and locally matched older output for ordinary questions, without making an extra model request.
+- Streams answers from the configured Codex app-server model.
+- Offers `ask`, `fix`, `cmd`, `deep`, and `full` modes.
+- Keeps session logs in a private temporary directory and removes them when the terminal session exits.
+
+```text
+Bash session → private PTY log → local context selection and redaction
+             → Codex app-server → streamed answer in the same terminal
+```
+
+## Quick start
+
+### Requirements
+
+- Linux, Bash, and a VTE-based terminal for automatic session capture.
+- Python 3.11 or newer and the `websockets` package.
+- Codex CLI installed and signed in, with its local app-server available.
+
+### Install
+
+Clone this repository, then run:
 
 ```bash
-sor --status
-sor pause
-sor resume
-sor clear
+./install.sh
 ```
 
-## İş prinsipi
+The installer places Sor's commands in `~/.local/bin` and adds the Bash hook to `~/.bashrc.d`. Make sure `~/.local/bin` is on your `PATH` and your `~/.bashrc` sources files from `~/.bashrc.d`; then open a new terminal.
 
-- İkinci Codex hesabının lokal `app-server` daemon-una qoşulur.
-- `gpt-6-luna` modelini `low` reasoning səviyyəsində işlədir.
-- `deep` rejimi eyni modeli `high` reasoning səviyyəsində işlədir.
-- Modelin ilk mətni gələnədək terminalda fəaliyyət göstəricisi göstərir.
-- Hər sual üçün müvəqqəti, yalnız oxuma icazəli sessiya başladır.
-- Hər VTE Bash sessiyasını ayrıca faylda saxlayır və komandaları exit code,
-  qovluq və müddətlə birlikdə strukturlaşdırılmış formada qeyd edir. Qovluq
-  `$XDG_RUNTIME_DIR/sor-sessions` altında, bu dəyişən yoxdursa cari istifadəçi
-  üçün `/tmp` altında yaradılır.
-- Sessiya qovluğu `0700`, log faylları `0600` icazəsi ilə yaradılır. Terminal bağlananda onun log faylı silinir.
-- Adi sorğularda son komandaların çıxışı və suala uyğun əvvəlki çıxışlar lokal
-  seçilərək maksimum 30 000 simvol göndərilir. Axtarış son 2 MB sessiya logunda
-  aparılır və əlavə model sorğusu yaratmır.
-- Background job bildirişləri kimi komanda bloklarından kənarda qalan məlumatlar
-  üçün büdcənin son 3 000 simvolu xam terminal quyruğuna ayrılır.
-- `deep` və `full` rejimlərində strukturlaşdırılmış komanda məlumatları ilə
-  birlikdə xam son 60 000 simvol göndərilir. `deep` əlavə olaraq `high`
-  reasoning istifadə edir.
-- Marker olmayan köhnə terminal sessiyalarında avtomatik olaraq 60 000
-  simvolluq xam kontekst fallback-i işləyir.
-- Bearer tokenləri, həssas environment dəyişənləri, tanınan GitHub/OpenAI
-  tokenləri və private key blokları modelə göndərilməzdən əvvəl `[REDACTED]`
-  ilə əvəz olunur. Xam lokal log dəyişdirilmir.
-
-Recorder terminalın PTY çıxışını yazır; interaktiv shell-in ekranda göstərdiyi
-komandalar da buna daxildir. VTE Bash başlanğıc hook-u recorder-i avtomatik
-başladır. Bəzi `HISTCONTROL` qaydaları və prompt göstərilmədən shell-dən çıxış
-son komandanın strukturlaşdırılmış qeydinin yaranmasına mane ola bilər.
-Komanda və çıxış əlaqələndirilməsi terminaldakı görünməz markerlərə əsaslanır;
-uyğunsuz marker və ya natamam blok aşkarlananda tam xam kontekst fallback-i
-istifadə olunur.
-
-## Tələblər
-
-- Linux və Bash. Avtomatik qeyd üçün VTE əsaslı terminal lazımdır.
-- ChatGPT hesabı ilə daxil olunmuş Codex CLI və işləyən app-server daemon.
-- Python 3 və `websockets` paketi.
-- Mövcud quraşdırma premium Codex qovluğu kimi `/home/fadayat/.codex-account-2`, Codex CLI kimi `/home/fadayat/.local/bin/codex` istifadə edir.
-
-## Quraşdırma
+To install manually:
 
 ```bash
 mkdir -p "$HOME/.local/bin" "$HOME/.bashrc.d"
@@ -81,18 +55,98 @@ install -m 0755 bin/sor-session-event "$HOME/.local/bin/sor-session-event"
 install -m 0644 bash/sor-session.bash "$HOME/.bashrc.d/sor-session.bash"
 ```
 
-`~/.bashrc` faylı `~/.bashrc.d` qovluğundakı faylları oxumalıdır. Sonra yeni terminal aç və yoxla:
+The Bash hook must be sourced by `~/.bashrc`. Start a new terminal and check the setup:
 
 ```bash
 sor --status
-sor "Salam, necəsən?"
+sor "Hello, how are you?"
 ```
 
-## Fayllar
+## Usage
 
-- `bin/sor` — lokal app-server socket-i ilə Codex-ə sual göndərir.
-- `bin/sor-session-recorder` — PTY vasitəsilə bir terminal sessiyasını qeyd edir.
-- `bin/sor-session-event` — tamamlanan Bash komandalarının metadatasını yazır.
-- `bash/sor-session.bash` — interaktiv VTE Bash sessiyalarında recorder-i başladır.
+```bash
+sor "Why did this command fail?"       # Ask with current terminal context
+sor                                    # Explain the last completed command
+sor fix                                # Diagnose and suggest a safe correction
+sor cmd "find files larger than 1 GB"  # Return a shell command only
+sor deep "explain this build failure"  # Larger context and high reasoning
+sor full "review the recent output"    # Raw recent terminal context
+sor --last 5 "what happened?"          # Include up to five recent command records
+sor --no-context "what does tar do?"   # Ask without terminal history
+```
 
-Gələcək provayder və versiya planı [ROADMAP.md](ROADMAP.md) faylındadır.
+Session controls:
+
+```bash
+sor --status
+sor pause   # Stop recording context for this terminal
+sor resume  # Resume recording
+sor clear   # Clear the current terminal's recorded context
+```
+
+Ordinary questions use local relevance matching over the recent session log. Sor prioritizes recent commands and includes older output when its words match the question. It sends up to 30,000 characters, including a small tail of output outside command blocks. `deep` and `full` send up to 60,000 characters of recent raw terminal context; `deep` also uses high reasoning. If Sor cannot safely associate recent output with its command markers, it falls back to the raw recent context.
+
+## Configuration
+
+Sor reads `~/.config/sor/config.toml`, or `$XDG_CONFIG_HOME/sor/config.toml` when `XDG_CONFIG_HOME` is set. Environment variables override file values.
+
+```toml
+[provider]
+name = "Codex"
+codex_home = "~/.codex"
+# codex_bin = "/path/to/codex" # Optional; otherwise resolved from PATH
+model = "gpt-6-luna"
+effort = "low"
+work_dir = "/tmp"
+```
+
+Supported environment overrides:
+
+| Variable | Purpose |
+| --- | --- |
+| `SOR_PROVIDER_NAME` | Display name for the provider |
+| `SOR_CODEX_HOME` | Codex home directory |
+| `SOR_CODEX_BIN` | Codex executable path; defaults to PATH lookup |
+| `SOR_MODEL` | Model name |
+| `SOR_EFFORT` | Default reasoning effort |
+| `SOR_WORK_DIR` | Working directory passed to app-server |
+
+Defaults are the standard `~/.codex` home, Codex CLI resolved from `PATH`, `gpt-6-luna`, `low` reasoning, and `/tmp` as the app-server working directory. The selected Codex home must already be signed in and have an app-server daemon Sor can reach.
+
+## Privacy and session capture
+
+Sor records the current terminal session locally. The log and command metadata live under `$XDG_RUNTIME_DIR/sor-sessions`, or a per-user directory under `/tmp` if `XDG_RUNTIME_DIR` is unavailable. The directory is private, files are created with owner-only permissions, and the session files are removed when the terminal recorder exits.
+
+Terminal context is sent to the configured model **only when you invoke `sor`**. `sor --no-context` omits it. `sor pause` stops recording for the current terminal; `sor clear` truncates its current context.
+
+Sor redacts common bearer tokens, sensitive environment assignments, recognized GitHub/OpenAI token formats, and private-key blocks before building the prompt. This is best-effort pattern matching, not a guarantee that every secret will be found. Review your terminal output before sending it, and use `--no-context` when you do not want the session included.
+
+Command/output boundaries use invisible terminal markers and are best-effort. Older sessions, missing markers, and incomplete blocks use the raw-tail fallback. Sor reads only the session paths passed by its recorder; it does not inspect other terminal sessions or project files for a normal question.
+
+## Troubleshooting
+
+- **`sor: command not found`** — confirm `~/.local/bin` is on `PATH`, then open a new terminal.
+- **No terminal context / zero command records** — use a new interactive Bash terminal in a VTE-based terminal and check `sor --status`. Other shells are not currently supported for automatic capture.
+- **Codex app-server connection error** — verify Codex CLI is installed, signed in under the configured Codex home, and available on `PATH` or through `SOR_CODEX_BIN`.
+- **The last command is missing** — Bash history settings such as `HISTCONTROL`, or exiting before the next prompt, can prevent a command record from being written. Sor then uses the raw-tail fallback when possible.
+- **Too much or sensitive context** — use `sor --no-context`, `sor pause`, or `sor clear` before asking.
+
+## Development
+
+The implementation is Python plus a small Bash integration. The main files are:
+
+- `bin/sor` — CLI, app-server client, context selection, and redaction.
+- `bin/sor-session-recorder` — PTY recorder and session-file lifecycle.
+- `bin/sor-session-event` — structured command-event writer.
+- `bash/sor-session.bash` — interactive Bash hooks.
+- `tests/` — focused unit and PTY integration tests.
+
+Run the current test suite with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+See [ROADMAP.md](ROADMAP.md) for shipped capabilities and planned work. Bug reports should include the command used, expected behavior, actual behavior, and relevant sanitized output. Do not attach terminal logs containing credentials or personal data.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a larger change.

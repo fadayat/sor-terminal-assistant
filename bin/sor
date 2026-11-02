@@ -6,10 +6,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
 import threading
+import tomllib
 
 from websockets.sync.client import unix_connect
 
@@ -28,10 +30,17 @@ class ProviderConfig:
         return self.home / "app-server-control" / "app-server-control.sock"
 
 
+CONFIG_ROOT = (
+    Path(os.environ["XDG_CONFIG_HOME"])
+    if os.environ.get("XDG_CONFIG_HOME")
+    else Path.home() / ".config"
+)
+CONFIG_PATH = CONFIG_ROOT / "sor" / "config.toml"
+DEFAULT_CODEX_BIN = Path(shutil.which("codex") or (Path.home() / ".local/bin/codex"))
 PROVIDER = ProviderConfig(
-    name="Codex 2",
-    home=Path("/home/fadayat/.codex-account-2"),
-    executable=Path("/home/fadayat/.local/bin/codex"),
+    name="Codex",
+    home=Path.home() / ".codex",
+    executable=DEFAULT_CODEX_BIN,
     model="gpt-6-luna",
     default_effort="low",
 )
@@ -86,6 +95,39 @@ DEVELOPER_INSTRUCTIONS = (
 
 class SorError(Exception):
     pass
+
+
+def configure_provider() -> None:
+    global PROVIDER, CODEX_HOME, CODEX_BIN, SOCKET_PATH, MODEL, EFFORT, WORK_DIR
+    config = {}
+    if CONFIG_PATH.exists():
+        try:
+            with CONFIG_PATH.open("rb") as config_file:
+                config = tomllib.load(config_file)
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            raise SorError(f"Konfiqurasiya faylı oxunmadı: {CONFIG_PATH}") from error
+        if not isinstance(config, dict) or not isinstance(config.get("provider", {}), dict):
+            raise SorError("Konfiqurasiyada [provider] bölməsi düzgün deyil.")
+    values = config.get("provider", {})
+
+    def setting(key: str, env_name: str, default: str) -> str:
+        value = os.environ.get(env_name, values.get(key, default))
+        if not isinstance(value, str) or not value.strip():
+            raise SorError(f"Konfiqurasiya dəyəri boş və ya etibarsızdır: {key}")
+        return value
+
+    home = Path(setting("codex_home", "SOR_CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    executable = Path(setting("codex_bin", "SOR_CODEX_BIN", str(DEFAULT_CODEX_BIN))).expanduser()
+    PROVIDER = ProviderConfig(
+        name=setting("name", "SOR_PROVIDER_NAME", "Codex"),
+        home=home,
+        executable=executable,
+        model=setting("model", "SOR_MODEL", "gpt-6-luna"),
+        default_effort=setting("effort", "SOR_EFFORT", "low"),
+        work_dir=str(Path(setting("work_dir", "SOR_WORK_DIR", "/tmp")).expanduser()),
+    )
+    CODEX_HOME, CODEX_BIN, SOCKET_PATH = PROVIDER.home, PROVIDER.executable, PROVIDER.socket_path
+    MODEL, EFFORT, WORK_DIR = PROVIDER.model, PROVIDER.default_effort, PROVIDER.work_dir
 
 
 class Spinner:
@@ -758,6 +800,11 @@ def manage_session(action: str) -> int:
 
 def main() -> int:
     args = parse_cli(sys.argv[1:])
+    try:
+        configure_provider()
+    except SorError as error:
+        print(f"Sor konfiqurasiya xətası: {error}", file=sys.stderr)
+        return 2
     if args.status:
         log_path, events_path = session_files()
         paused = is_session_paused(log_path)
@@ -765,6 +812,7 @@ def main() -> int:
         context_status = "dayandırılıb" if paused else ("aktiv" if log_path else "aktiv deyil")
         print(f"Hesab: {PROVIDER.name} ({PROVIDER.home})")
         print(f"Model: {PROVIDER.model} {PROVIDER.default_effort}")
+        print(f"Konfiqurasiya: {CONFIG_PATH}")
         print(f"Cari terminal konteksti: {context_status}")
         print(f"Strukturlaşdırılmış komanda qeydləri: {event_count}")
         print("Kontekst seçimi: ağıllı (son komandalar + suala uyğun çıxışlar)")

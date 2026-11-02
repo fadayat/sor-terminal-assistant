@@ -1,72 +1,32 @@
-# Sor inkişaf planı
+# Sor roadmap
 
-Sor mərhələli hazırlanır. Erkən versiyalarda məqsəd bütün mümkün funksiyaları
-bir dəfəyə əlavə etmək deyil; təhlükəsiz, test edilə bilən və yeni model
-provayderlərinə açıq təməl qurmaqdır.
+This roadmap separates capabilities already present in the repository from ideas that still need implementation. Sor is an early-stage project; priorities may change based on real use and community feedback.
 
-## Arxitektura istiqaməti
+## Shipped
 
-```text
-terminal sessiyası
-  -> kontekst toplayıcı
-  -> məxfilik və seçim qatı
-  -> sorğu rejimi
-  -> provayder adapteri
-  -> model cavabı
-```
+- Terminal question command with `ask`, `fix`, `cmd`, `deep`, and `full` modes.
+- Local Codex app-server connection using the user's existing Codex sign-in.
+- Streaming answers and a waiting indicator.
+- Interactive VTE Bash PTY capture with structured command metadata and output markers.
+- Local relevance matching over the current terminal session, plus raw-tail fallback.
+- Session controls: `--status`, `pause`, `resume`, and `clear`.
+- Best-effort secret redaction before terminal context is sent.
+- `./install.sh` installer and configuration through `config.toml` or environment variables.
 
-- **Kontekst toplayıcı** komanda, çıxış, exit code, qovluq və müddət kimi
-  terminal məlumatlarını hazırlayır.
-- **Məxfilik qatı** yalnız lazım olan konteksti seçir və ehtimal olunan
-  sirləri modelə göndərməzdən əvvəl gizlədir.
-- **Sorğu rejimi** `ask`, `fix`, `cmd` və `deep` kimi davranışları müəyyən edir.
-- **Provayder adapteri** autentifikasiya, model seçimi və cavab axınını CLI
-  məntiqindən ayırır. İlk adapter lokal Codex app-server üçündür.
+## Planned
 
-## v0.2 — təhlükəsiz terminal təməli
+- Improve command/output matching for asynchronous jobs, multiline commands, and unusual shell history settings.
+- Add a doctor command and clearer configuration validation.
+- Add persistent conversation support within a terminal session, with an explicit reset command.
+- Add an optional keybinding that places a suggested command on the prompt for review.
+- Improve context controls so users can inspect and adjust what a question will send.
+- Explore additional providers, Codex profiles, and local models through supported authentication methods.
+- Evaluate Zsh and Fish support after the Bash capture path is more mature.
 
-- Strukturlaşdırılmış komanda metadatası.
-- Sual yazılmadıqda son əmrin avtomatik izahı.
-- `fix`, `cmd` və `deep` rejimləri.
-- `--last`, `--no-context`, `pause`, `resume` və `clear` idarəsi.
-- Modelə göndərilməzdən əvvəl secret redaction.
-- Unit testlər və quraşdırma yoxlaması.
-- Cari Codex 2 bağlantısının mərkəzləşdirilmiş konfiqurasiyası.
+## Later ideas
 
-## v0.3 — sessiya və gündəlik istifadə
+- Optional project and Git context.
+- File, image, or clipboard input.
+- More context-selection and privacy controls.
 
-- Komanda çıxışlarının ayrıca bloklar kimi tutulması və sualla uyğun blokların
-  lokal seçilməsi.
-- `full` rejimi ilə xam 60 000 simvolluq kontekstə məcburi keçid.
-- Hər terminal üçün davam edən söhbət və `reset`.
-- Təklif olunan əmri Bash sətrinə yerləşdirmək; avtomatik icra etməmək.
-- Qısa yol, rəngli çıxış və daha aydın xəta mesajları.
-- `doctor` komandası və sadə installer/updater.
-- Konfiqurasiya faylı və provayder adapter interfeysi.
-
-## v0.4 — çoxprovayderli işləmə
-
-- Əlavə Codex hesabları və profilləri.
-- İstifadəçinin gətirdiyi uyğun API və abunəlik inteqrasiyaları.
-- Lokal model adapteri, məsələn Ollama.
-- Rejimə görə provayder/model seçimi və təhlükəsiz fallback.
-- Heç bir tokeni repo və ya terminal kontekstində saxlamayan credential qatı.
-
-Hər inteqrasiya yalnız həmin xidmətin rəsmi olaraq icazə verdiyi autentifikasiya
-üsulu ilə əlavə olunacaq. Bir xidmətin abunəliyi avtomatik olaraq ümumi API
-açarı hesab edilməyəcək.
-
-## v0.5 — zəngin kontekst
-
-- Fayl, şəkil və clipboard girişi.
-- Git və layihə kontekstinin seçimli əlavə edilməsi.
-- Bash-dan əlavə Zsh və Fish dəstəyi.
-- Kontekst büdcəsi, lokal məxfilik görünüşü və audit məlumatı.
-
-## v1.0 meyarları
-
-- Stabil CLI müqaviləsi və geriyə uyğun konfiqurasiya.
-- Provayder xətalarının təhlükəsiz bərpası.
-- Quraşdırma, yeniləmə və silmə axınları.
-- Bash/Zsh/Fish üzrə inteqrasiya testləri.
-- Sirlərin təsadüfən göndərilməsinə qarşı sənədləşdirilmiş təhlükəsizlik modeli.
+These are ideas, not current features or commitments. Sor will not claim support for a provider, shell, or workflow until it has been implemented and documented.

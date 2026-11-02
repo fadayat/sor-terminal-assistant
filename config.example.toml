@@ -1,0 +1,7 @@
+[provider]
+name = "Codex"
+codex_home = "~/.codex"
+codex_bin = "~/.local/bin/codex"
+model = "gpt-6-luna"
+effort = "low"
+work_dir = "/tmp"
