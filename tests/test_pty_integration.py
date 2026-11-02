@@ -49,7 +49,7 @@ class PtyIntegrationTests(unittest.TestCase):
                 child.sendline("false")
                 child.expect_exact("SOR_TEST_PROMPT> ")
                 child.sendline('wc -l < "$SOR_SESSION_EVENTS"')
-                child.expect_exact("\r2\r\n")
+                child.expect(r"\r(?:\x1b\]777;sor-start=[^\x07]*\x07)?2\r\n")
                 child.expect_exact("SOR_TEST_PROMPT> ")
                 child.sendline("exit")
                 child.expect(pexpect.EOF)

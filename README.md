@@ -4,6 +4,8 @@
 
 <p align="center">
   <a href="https://github.com/fadayat/sor-terminal-assistant/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/fadayat/sor-terminal-assistant?style=flat-square"></a>
+  <a href="https://github.com/fadayat/sor-terminal-assistant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fadayat/sor-terminal-assistant/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square"></a>
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-1793d1?style=flat-square">
   <img alt="Shell: Bash" src="https://img.shields.io/badge/shell-Bash-4eaa25?style=flat-square">
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square">
@@ -181,3 +183,7 @@ python3 -m unittest discover -s tests -v
 See [ROADMAP.md](ROADMAP.md) for shipped capabilities and planned work. Bug reports should include the command used, expected behavior, actual behavior, and relevant sanitized output. Do not attach terminal logs containing credentials or personal data.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a larger change. Security-sensitive reports should follow [SECURITY.md](SECURITY.md).
+
+## License
+
+Sor is licensed under the [MIT License](LICENSE).
