@@ -44,6 +44,18 @@ Bash session → private PTY log → local context selection and redaction
              → Codex app-server → streamed answer in the same terminal
 ```
 
+## Where Sor is heading
+
+Sor currently supports a locally authenticated Codex app-server. The planned provider layer will make the terminal experience independent from one backend:
+
+- OpenAI API access with a user-supplied API key loaded from the environment or another secure local source.
+- Configurable OpenAI-compatible endpoints for supported local and self-hosted models.
+- Evaluated adapters for popular local runtimes such as Ollama, LM Studio, and llama.cpp.
+- Multiple named provider profiles with explicit model, endpoint, and reasoning settings.
+- Provider-aware context limits, streaming, health checks, and clear error reporting.
+
+These are roadmap items, not current features. Provider support will only be marked as shipped after implementation and testing. See [ROADMAP.md](ROADMAP.md) for the full plan.
+
 ## Quick start
 
 ### Requirements

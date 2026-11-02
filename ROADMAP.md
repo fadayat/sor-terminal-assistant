@@ -13,14 +13,26 @@ This roadmap separates capabilities already present in the repository from ideas
 - Best-effort secret redaction before terminal context is sent.
 - `./install.sh` installer and configuration through `config.toml` or environment variables.
 
-## Planned
+## Planned: provider layer
+
+Sor currently talks to a locally authenticated Codex app-server. The next provider architecture should preserve one terminal workflow while allowing users to choose how requests are served.
+
+- Separate the terminal/context pipeline from provider-specific transport and authentication.
+- Add optional OpenAI API support with user-supplied credentials loaded from environment variables or a secure local source. Secrets must never be committed to the repository or copied into terminal context.
+- Add configurable OpenAI-compatible endpoints for supported local and self-hosted models.
+- Evaluate first-class adapters for Ollama, LM Studio, and llama.cpp instead of claiming compatibility before it is tested.
+- Support multiple named profiles for different providers, models, endpoints, and reasoning settings.
+- Add provider discovery, configuration validation, health checks, and actionable connection errors.
+- Make streaming, cancellation, timeouts, and context limits consistent across providers where their capabilities allow it.
+- Document clearly when a provider requires an API key, a local service, an existing product sign-in, or usage-based billing.
+
+## Planned: terminal experience
 
 - Improve command/output matching for asynchronous jobs, multiline commands, and unusual shell history settings.
 - Add a doctor command and clearer configuration validation.
 - Add persistent conversation support within a terminal session, with an explicit reset command.
 - Add an optional keybinding that places a suggested command on the prompt for review.
 - Improve context controls so users can inspect and adjust what a question will send.
-- Explore additional providers, Codex profiles, and local models through supported authentication methods.
 - Evaluate Zsh and Fish support after the Bash capture path is more mature.
 
 ## Later ideas
