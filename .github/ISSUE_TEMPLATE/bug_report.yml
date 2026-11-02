@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem in Sor
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Remove credentials, personal paths, hostnames, and unrelated terminal output before submitting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and the result you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: List the smallest set of steps that reproduces the problem.
+      placeholder: |
+        1. Run ...
+        2. Ask Sor ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Sor version or commit
+      placeholder: v0.x.y or commit SHA
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Distribution, terminal, Bash version, Python version, and Codex CLI version.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized output
+      description: Include only output needed to understand the bug. Never include secrets or raw private session logs.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials and private information from this report.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

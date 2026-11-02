@@ -1,6 +1,15 @@
-# Sor
+<p align="center">
+  <img src="assets/sor-social-preview.svg" alt="Sor — Ask your terminal" width="800">
+</p>
 
-**Ask your terminal.** Sor (`sor` means “ask” in Azerbaijani) is a small, context-aware terminal companion. It can use the command and output from your current shell session to help explain errors, suggest a fix, or write a command for you to review.
+<p align="center">
+  <a href="https://github.com/fadayat/sor-terminal-assistant/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/fadayat/sor-terminal-assistant?style=flat-square"></a>
+  <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-1793d1?style=flat-square">
+  <img alt="Shell: Bash" src="https://img.shields.io/badge/shell-Bash-4eaa25?style=flat-square">
+  <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square">
+</p>
+
+**Sor** (`sor` means “ask” in Azerbaijani) is a context-aware terminal companion for Codex. It uses the command and output already visible in your current shell session to explain errors, suggest a fix, or write a command for you to review.
 
 Sor runs as a normal shell command and connects to a locally authenticated Codex app-server. It is designed to stay close to your terminal workflow: ask a question, get a streamed answer, and keep control of what runs.
 
@@ -13,6 +22,14 @@ sor cmd "show the largest files in this directory"
 Suggested commands are printed as text. Sor does not execute them.
 
 > **Early-stage software:** Sor is under active development. Today, automatic session capture is for interactive Bash sessions in VTE-based terminals on Linux. Context matching and secret redaction are best-effort; see [Privacy and session capture](#privacy-and-session-capture).
+
+## Why Sor
+
+- **Ask where the problem happened.** Stay in the terminal instead of copying long output into another window.
+- **Send focused context.** Sor matches your question to recent command/output blocks locally before contacting the model.
+- **Keep execution under your control.** Suggested commands are printed for review and never run automatically.
+- **Use your existing Codex sign-in.** Sor talks to the local Codex app-server rather than implementing a separate hosted account system.
+- **See the privacy boundary.** Pause, clear, or omit session context at any time.
 
 ## What it does
 
@@ -40,6 +57,8 @@ Bash session → private PTY log → local context selection and redaction
 Clone this repository, then run:
 
 ```bash
+git clone https://github.com/fadayat/sor-terminal-assistant.git
+cd sor-terminal-assistant
 ./install.sh
 ```
 
@@ -149,4 +168,4 @@ python3 -m unittest discover -s tests -v
 
 See [ROADMAP.md](ROADMAP.md) for shipped capabilities and planned work. Bug reports should include the command used, expected behavior, actual behavior, and relevant sanitized output. Do not attach terminal logs containing credentials or personal data.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a larger change.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a larger change. Security-sensitive reports should follow [SECURITY.md](SECURITY.md).
