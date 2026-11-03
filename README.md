@@ -195,9 +195,10 @@ See [ROADMAP.md](ROADMAP.md) for shipped capabilities and planned work. Bug repo
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a larger change. Security-sensitive reports should follow [SECURITY.md](SECURITY.md).
 
-## Acknowledgements
+## Contributors
 
-OpenAI Codex assisted with implementation and documentation. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for contributor credits.
+- **Fadayat Shamilov** — creator and project maintainer.
+- **OpenAI Codex** — AI coding assistant that helped with implementation, tests, and documentation.
 
 ## License
 
